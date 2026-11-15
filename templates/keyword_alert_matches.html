@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>キーワード検索結果</h1>
+
+<p>検索キーワード: {{ keywords|join:", " }}</p>
+
+{% if matching_emails %}
+    <h2>{{ matching_emails|length }}件のメールが見つかりました</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>件名</th>
+                <th>送信者</th>
+                <th>受信日時</th>
+                <th>重要度</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for email in matching_emails %}
+            <tr>
+                <td><a href="{% url 'email_detail' email.id %}">{{ email.subject }}</a></td>
+                <td>{{ email.sender }}</td>
+                <td>{{ email.received_at|date:"Y-m-d H:i" }}</td>
+                <td>{{ email.get_priority_display }}</td>
+                <td>
+                    <a href="{% url 'email_detail' email.id %}">詳細</a> |
+                    <a href="{% url 'classify_priority' email.id %}">重要度判定</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p>キーワードを含むメールは見つかりませんでした</p>
+{% endif %}
+
+<div class="actions">
+    <a href="{% url 'keyword_alerts' %}">キーワード設定に戻る</a> |
+    <a href="{% url 'dashboard' %}">ダッシュボードに戻る</a>
+</div>
+{% endblock %}

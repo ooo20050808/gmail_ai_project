@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>返信案生成</h1>
+
+<div class="email-reply">
+    <h2>{{ email.subject }}</h2>
+    
+    <table>
+        <tr>
+            <th>送信者:</th>
+            <td>{{ email.sender }}</td>
+        </tr>
+        <tr>
+            <th>受信日時:</th>
+            <td>{{ email.received_at|date:"Y-m-d H:i" }}</td>
+        </tr>
+    </table>
+    
+    <div class="tone-selector">
+        <h3>返信スタイル:</h3>
+        <a href="{% url 'email_reply' email.id %}?tone=polite" {% if tone == 'polite' %}class="active"{% endif %}>丁寧</a> |
+        <a href="{% url 'email_reply' email.id %}?tone=casual" {% if tone == 'casual' %}class="active"{% endif %}>カジュアル</a> |
+        <a href="{% url 'email_reply' email.id %}?tone=formal" {% if tone == 'formal' %}class="active"{% endif %}>フォーマル</a>
+    </div>
+    
+    <div class="reply-content">
+        <h3>返信案:</h3>
+        <pre>{{ email.reply_draft|linebreaks }}</pre>
+    </div>
+    
+    <div class="regenerate">
+        <a href="{% url 'email_reply' email.id %}?tone={{ tone }}&regenerate=true">再生成</a>
+    </div>
+</div>
+
+<div class="actions">
+    <a href="{% url 'email_detail' email.id %}">詳細に戻る</a> |
+    <a href="{% url 'email_list' %}">一覧に戻る</a> |
+    <a href="{% url 'email_summary' email.id %}">要約を表示</a>
+</div>
+{% endblock %}

@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>ダッシュボード</h1>
+
+<div class="mb-3">
+    <a href="{% url 'email_list' %}" class="btn btn-primary">メール一覧</a>
+    <a href="{% url 'gmail_settings' %}" class="btn btn-secondary">Gmail設定</a>
+    <a href="{% url 'logout' %}" class="btn btn-danger">ログアウト</a>
+</div>
+
+{% if not gmail_configured %}
+<div class="setup-notice">
+    <p>Gmailアカウントが設定されていません。<a href="{% url 'gmail_settings' %}">設定してください</a></p>
+</div>
+{% endif %}
+
+<div class="stats-container">
+    <h2>統計情報</h2>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <h3>総メール数</h3>
+            <p class="stat-number">{{ total_emails }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>要約済み</h3>
+            <p class="stat-number">{{ summarized_emails }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>返信案作成済み</h3>
+            <p class="stat-number">{{ replied_emails }}</p>
+        </div>
+    </div>
+</div>
+
+<div class="recent-emails">
+    <h2>最近のメール（最新5件）</h2>
+    {% if recent_emails %}
+    <table>
+        <thead>
+            <tr>
+                <th>件名</th>
+                <th>送信者</th>
+                <th>受信日時</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for email in recent_emails %}
+            <tr>
+                <td><a href="{% url 'email_detail' email.id %}">{{ email.subject }}</a></td>
+                <td>{{ email.sender }}</td>
+                <td>{{ email.received_at|date:"Y-m-d H:i" }}</td>
+                <td>
+                    <a href="{% url 'email_detail' email.id %}">詳細</a> |
+                    <a href="{% url 'email_summary' email.id %}">要約</a> |
+                    <a href="{% url 'email_reply' email.id %}">返信</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>メールがありません。</p>
+    {% endif %}
+    
+    <p><a href="{% url 'email_list' %}">すべてのメールを見る</a></p>
+</div>
+
+<div class="quick-actions">
+    <h2>クイックアクション</h2>
+    <ul>
+        {% if gmail_configured %}
+        <li><a href="{% url 'fetch_emails' %}">メールを取得</a></li>
+        {% endif %}
+        <li><a href="{% url 'email_list' %}">メール一覧を表示</a></li>
+        <li><a href="{% url 'keyword_alerts' %}">キーワードアラート設定</a></li>
+        <li><a href="{% url 'gmail_settings' %}">Gmail設定を変更</a></li>
+    </ul>
+</div>
+{% endblock %}

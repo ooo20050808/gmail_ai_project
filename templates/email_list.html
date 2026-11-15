@@ -1,0 +1,179 @@
+{% extends 'base.html' %}
+{% load tz %}
+
+{% block content %}
+<h1>メール一覧</h1>
+
+<!-- フォルダ切り替えボタン -->
+<div class="mb-3 btn-group" role="group">
+    <a href="{% url 'email_list' %}?box=inbox&tab=primary" class="btn {% if current_box == 'inbox' %}btn-primary{% else %}btn-outline-primary{% endif %}">受信トレイ</a>
+    <a href="{% url 'email_list' %}?box=sent" class="btn {% if current_box == 'sent' %}btn-primary{% else %}btn-outline-primary{% endif %}">送信済みメール</a>
+    <a href="{% url 'email_list' %}?box=junk" class="btn {% if current_box == 'junk' %}btn-primary{% else %}btn-outline-primary{% endif %}">迷惑メール</a>
+    <a href="{% url 'email_list' %}?box=trash" class="btn {% if current_box == 'trash' %}btn-primary{% else %}btn-outline-primary{% endif %}">ゴミ箱</a>
+</div>
+
+<!-- 受信トレイの場合のみタブナビゲーションを表示 -->
+{% if current_box == 'inbox' %}
+<ul class="nav nav-pills mb-3" style="display: flex; list-style: none; padding: 0; gap: 10px;">
+    <li>
+        <a href="{% url 'email_list' %}?box=inbox&tab=primary" class="btn btn-sm {% if current_tab == 'primary' or not current_tab %}btn-primary{% else %}btn-outline-primary{% endif %}">
+            メイン
+        </a>
+    </li>
+    <li>
+        <a href="{% url 'email_list' %}?box=inbox&tab=updates" class="btn btn-sm {% if current_tab == 'updates' or current_tab == '新着' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+            新着
+        </a>
+    </li>
+    <li>
+        <a href="{% url 'email_list' %}?box=inbox&tab=promotions" class="btn btn-sm {% if current_tab == 'promotions' or current_tab == 'プロモーション' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+            プロモーション
+        </a>
+    </li>
+    <li>
+        <a href="{% url 'email_list' %}?box=inbox&tab=social" class="btn btn-sm {% if current_tab == 'social' or current_tab == 'ソーシャル' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+            ソーシャル
+        </a>
+    </li>
+</ul>
+{% endif %}
+
+<!-- ステータスバー（外部スタイル適用版） -->
+{% if is_fetching %}
+<div class="status-progress-card">
+    <div class="status-progress-body">
+        <div class="status-progress-info">
+            <div class="status-progress-title">
+                AI要約 & 同期バックグラウンド処理中
+            </div>
+            <div class="status-progress-details">
+                <div class="status-progress-text">
+                    {{ completed_count }} / {{ total_count }} 件完了
+                </div>
+                <div class="status-progress-bar-container">
+                    <div class="status-progress-bar-inner"
+                         style="width: {% widthratio completed_count total_count 100 %}%;">
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="status-progress-icon">
+            <i class="fas fa-sync fa-spin"></i>
+        </div>
+    </div>
+</div>
+
+<script>
+    setTimeout(function(){
+        location.reload();
+    }, 3000);
+</script>
+{% endif %}
+
+<div class="fetch-action-buttons mb-3">
+    <a href="{% url 'fetch_emails' %}?box={{ current_box }}&tab={{ current_tab }}&filter=unread" class="btn btn-fetch btn-fetch-unread">
+      <i class="fas fa-envelope"></i> 未読メールのみ取得
+    </a>
+    <a href="{% url 'fetch_emails' %}?box={{ current_box }}&tab={{ current_tab }}&filter=all" class="btn btn-fetch btn-fetch-all">
+      <i class="fas fa-inbox"></i> すべて取得
+    </a>
+</div>
+
+<!-- テーブル一覧表示 -->
+{% if page_obj %}
+    <table class="table align-middle">
+        <thead>
+            <tr>
+                <th>件名</th>
+                <th>AI解析カテゴリ</th>
+                <th>送信者</th>
+                <th>受信日時</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for email in page_obj %}
+            <tr>
+                <td><a href="{% url 'email_detail' email.id %}">{{ email.subject }}</a></td>
+                <td>
+                    {% if email.category == 'agent' %}
+                        <span class="badge bg-info text-dark">エージェント</span>
+                    {% elif email.category == 'company' %}
+                        <span class="badge bg-success">企業直接</span>
+                    {% elif email.category == 'service' %}
+                        <span class="badge bg-secondary">通知・サービス</span>
+                    {% else %}
+                        <span class="badge bg-light text-dark">その他</span>
+                    {% endif %}
+                </td>
+                <td>{{ email.sender }}</td>
+                <td>{{ email.received_at|date:"Y-m-d H:i" }}</td>
+                <!-- email_list.html の <table> 内、操作列 (<td>) の部分 -->
+                <td>
+                    <a href="{% url 'email_detail' email.id %}">詳細</a> |
+                    <a href="{% url 'email_summary' email.id %}">要約</a> |
+                    <a href="{% url 'email_reply' email.id %}">返信</a> |
+
+                    {% if current_box == 'trash' %}
+                        <!-- ゴミ箱表示のときは「元に戻す」と「完全削除」を表示 -->
+                        <a href="{% url 'restore_email' email.id %}?box={{ current_box }}" class="text-success">元に戻す</a> |
+                        <a href="{% url 'delete_email' email.id %}?box={{ current_box }}"
+                           class="text-danger"
+                           onclick="return confirm('このメールを完全に削除しますか？この操作は元に戻せません。');">
+                           完全削除
+                        </a>
+                    {% else %}
+                        <!-- ゴミ箱以外では通常の「削除（ゴミ箱へ移動）」を表示 -->
+                        <a href="{% url 'delete_email' email.id %}?box={{ current_box }}"
+                           class="text-danger"
+                           onclick="return confirm('このメールをゴミ箱に移動しますか？');">
+                           削除
+                        </a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- ページネーションコントロール -->
+    {% if page_obj.has_other_pages %}
+    <nav aria-label="Page navigation" class="mt-4">
+        <ul class="pagination justify-content-center" style="display: flex; list-style: none; padding: 0; gap: 5px;">
+            <!-- 最初へ / 前へ -->
+            {% if page_obj.has_previous %}
+                <li><a class="btn btn-sm btn-outline-secondary" href="?box={{ current_box }}&tab={{ current_tab }}&page=1">&laquo; 最初</a></li>
+                <li><a class="btn btn-sm btn-outline-secondary" href="?box={{ current_box }}&tab={{ current_tab }}&page={{ page_obj.previous_page_number }}">前へ</a></li>
+            {% else %}
+                <li class="disabled"><span class="btn btn-sm btn-outline-secondary disabled">&laquo; 最初</span></li>
+                <li class="disabled"><span class="btn btn-sm btn-outline-secondary disabled">前へ</span></li>
+            {% endif %}
+
+            <!-- ページ番号一覧 -->
+            {% for num in page_obj.paginator.page_range %}
+                {% if page_obj.number == num %}
+                    <li><span class="btn btn-sm btn-primary active">{{ num }}</span></li>
+                {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                    <li><a class="btn btn-sm btn-outline-secondary" href="?box={{ current_box }}&tab={{ current_tab }}&page={{ num }}">{{ num }}</a></li>
+                {% endif %}
+            {% endfor %}
+
+            <!-- 次へ / 最後へ -->
+            {% if page_obj.has_next %}
+                <li><a class="btn btn-sm btn-outline-secondary" href="?box={{ current_box }}&tab={{ current_tab }}&page={{ page_obj.next_page_number }}">次へ</a></li>
+                <li><a class="btn btn-sm btn-outline-secondary" href="?box={{ current_box }}&tab={{ current_tab }}&page={{ page_obj.paginator.num_pages }}">最後 &raquo;</a></li>
+            {% else %}
+                <li class="disabled"><span class="btn btn-sm btn-outline-secondary disabled">次へ</span></li>
+                <li class="disabled"><span class="btn btn-sm btn-outline-secondary disabled">最後 &raquo;</span></li>
+            {% endif %}
+        </ul>
+    </nav>
+    <div class="text-center text-muted small mt-2">
+        全 {{ page_obj.paginator.count }} 件中 {{ page_obj.start_index }} - {{ page_obj.end_index }} 件を表示（{{ page_obj.number }} / {{ page_obj.paginator.num_pages }} ページ）
+    </div>
+    {% endif %}
+
+{% else %}
+    <p class="mt-4">このカテゴリ・フォルダに該当するメールはありません。</p>
+{% endif %}
+{% endblock %}

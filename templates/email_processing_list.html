@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% load tz %}
+
+{% block extra_head %}
+{#処理中のメールが残っている場合のみ、3秒ごとにページを自動リフレッシュする #}
+{% if is_processing %}
+    <meta http-equiv="refresh" content="3">
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<h1>新着メール取得・AI処理状況</h1>
+
+<div class="card my-4">
+    <div class="card-body">
+        <h5 class="card-title">AIの進捗状況</h5>
+        <p class="card-text">
+            進捗: <strong>{{ completed_count }}</strong> / {{ total_count }} 件の要約が完了しています。
+        </p>
+        
+        {% if is_processing %}
+            <div class="alert alert-info" role="alert">
+                🔄 AIがバックグラウンドで要約・分類処理を行っています。この画面は自動的に最新の状態に更新されます...
+            </div>
+        {% else %}
+            <div class="alert alert-success" role="alert">
+                ✅ すべての新着メールの要約・分類が完了しました！
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="email-card-container">
+    <h3>要約・分類が完了したメール（新着順）</h3>
+    
+    {% for email in emails %}
+        <div class="card mb-3 shadow-sm">
+            <div class="card-header d-flex justify-content-between align-middle">
+                <div>
+                    <!-- カテゴリに応じたバッジ表示 -->
+                    {% if email.category == 'agent' %}
+                        <span class="badge bg-info text-dark">エージェント紹介</span>
+                    {% elif email.category == 'company' %}
+                        <span class="badge bg-success">応募先企業連絡</span>
+                    {% elif email.category == 'service' %}
+                        <span class="badge bg-secondary">サービス通知</span>
+                    {% else %}
+                        <span class="badge bg-light text-dark">その他</span>
+                    {% endif %}
+                    
+                    <strong class="ms-2">{{ email.subject }}</strong>
+                </div>
+                <small class="text-muted">{{ email.received_at|timezone:"Asia/Tokyo"|date:"Y-m-d H:i" }}</small>
+            </div>
+            <div class="card-body">
+                <p class="card-text"><strong>送信者:</strong> {{ email.sender }}</p>
+                <div class="p-3 bg-light rounded" style="font-size: 0.95rem;">
+                    <strong>AI要約:</strong>
+                    <p class="mt-2 mb-0">{{ email.summary|linebreaksbr }}</p>
+                </div>
+            </div>
+            <div class="card-footer text-end">
+                <a href="{% url 'email_detail' email.id %}" class="btn btn-outline-primary btn-sm">詳細表示・返信案作成</a>
+            </div>
+        </div>
+    {% empty %}
+        <div class="alert alert-warning" role="alert">
+            現在、表示可能な要約済みメールはありません（AI処理の開始を待っています）。
+        </div>
+    {% endfor %}
+</div>
+
+<div class="actions mt-4">
+    <a href="{% url 'email_list' %}" class="btn btn-secondary">通常の一覧に戻る</a>
+    <a href="{% url 'dashboard' %}" class="btn btn-outline-secondary">ダッシュボード</a>
+</div>
+{% endblock %}

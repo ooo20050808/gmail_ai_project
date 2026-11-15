@@ -1,0 +1,64 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <!-- favicon.ico 404エラー防止 -->
+    <link rel="shortcut icon" href="#">
+    <title>Gmail AI Project</title>
+</head>
+<body>
+    <header>
+        <nav>
+            {% if user.is_authenticated %}
+                <p>こんにちは、{{ user.username }}さん</p>
+                <a href="{% url 'dashboard' %}">ダッシュボード</a>
+                <a href="{% url 'logout' %}">ログアウト</a>
+            {% endif %}
+        </nav>
+    </header>
+    <main>
+        {% if messages %}
+        <div class="messages">
+            {% for message in messages %}
+            <div class="message {{ message.tags }}">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if not user.is_authenticated %}
+            <!-- ログイン画面エリア -->
+            <div class="login-container" style="max-width: 400px; margin: 40px auto; padding: 20px;">
+                <h2>ログイン</h2>
+                <form method="post" action="{% url 'login' %}">
+                    {% csrf_token %}
+                    <!-- リダイレクトループ防止用の next パラメータ保持 -->
+                    {% if request.GET.next %}
+                        <input type="hidden" name="next" value="{{ request.GET.next }}">
+                    {% endif %}
+
+                    <div style="margin-bottom: 15px;">
+                        <label for="id_username">ユーザー名:</label><br>
+                        <input type="text" name="username" id="id_username" required style="width: 100%; padding: 8px;">
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label for="id_password">パスワード:</label><br>
+                        <input type="password" name="password" id="id_password" required style="width: 100%; padding: 8px;">
+                    </div>
+
+                    <button type="submit" style="padding: 8px 16px;">ログイン</button>
+                </form>
+            </div>
+        {% else %}
+            <!-- 他のページで base.html を継承した際に表示されるコンテンツ枠 -->
+            {% block content %}
+            {% endblock %}
+        {% endif %}
+    </main>
+</body>
+</html>

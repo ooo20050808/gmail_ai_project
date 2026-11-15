@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% load tz %}
+
+{% block content %}
+<div class="email-detail">
+    <!-- スレッドヘッダー（件名） -->
+    <div class="thread-header">
+        <span>{{ email.subject }}</span>
+        <span class="badge-inbox">受信トレイ ({{ thread_messages|length }}件)</span>
+    </div>
+
+    <!-- メールスレッド一覧 -->
+    <div class="email-thread-container">
+        {% for msg in thread_messages %}
+        <!-- 最新のメール、または要約・返信があるものは最初から開く(open) -->
+        <details class="message-details-wrapper" {% if msg.is_open or msg.is_latest or msg.summary or msg.reply_draft %}open{% endif %}>
+            <summary class="message-summary-bar">
+                <div class="sender-info">
+                    <!-- アバター：送信者ごとのカラーとイニシャル -->
+                    <div class="avatar thread-index-avatar" style="background-color: {{ msg.avatar_color }};">
+                        {{ msg.initial }}
+                    </div>
+                    <span class="sender-name">{{ msg.sender }}</span>
+                    <!-- 閉じている時だけ表示される本文スニペット -->
+                    <span class="body-snippet">{{ msg.snippet }}</span>
+                </div>
+                <div class="meta-info">
+                    <span>{{ msg.received_at|date:"Y-m-d H:i" }}</span>
+                </div>
+            </summary>
+
+            <div class="message-content">
+                <!-- メール本文 -->
+                <div class="email-body-container">
+                    {{ msg.display_body|safe }}
+                </div>
+
+                <!-- AI要約 -->
+                {% if msg.summary %}
+                <div class="summary-box">
+                    <h4><i class="fas fa-robot"></i> AI要約:</h4>
+                    <p class="summary-text">{{ msg.summary }}</p>
+                </div>
+                {% endif %}
+
+                <!-- AI返信案 -->
+                {% if msg.reply_draft %}
+                <div class="summary-box reply-draft-box">
+                    <h4 class="reply-draft-title"><i class="fas fa-reply"></i> 返信案:</h4>
+                    <pre class="reply-draft-pre">{{ msg.reply_draft }}</pre>
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        {% endfor %}
+    </div>
+
+    <!-- 下部操作ボタン群 -->
+    <div class="actions-container">
+        <a href="{% url 'email_list' %}" class="btn btn-secondary btn-sm">一覧に戻る</a>
+        <a href="{% url 'email_summary' email.id %}" class="btn btn-primary btn-sm">要約を生成/表示</a>
+        <a href="{% url 'email_reply' email.id %}" class="btn btn-success btn-sm">返信案を生成/表示</a>
+        <a href="{% url 'classify_priority' email.id %}" class="btn btn-secondary btn-sm">AIで重要度判定</a>
+        <!-- email_detail.html などに配置する削除ボタンの例 -->
+        <a href="{% url 'delete_email' email.id %}?box={{ email.gmail_box }}"
+           class="btn btn-danger btn-sm"
+           onclick="return confirm('{% if email.gmail_box == 'trash' %}このメールを完全に削除しますか？{% else %}このメールをゴミ箱に移動しますか？{% endif %}');">
+            <i class="fas fa-trash"></i> {% if email.gmail_box == 'trash' %}完全に削除{% else %}ゴミ箱へ移動{% endif %}
+        </a>
+    </div>
+</div>
+{% endblock %}

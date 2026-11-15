@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Gmail設定{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Gmail設定 (Google OAuth 連携)</h2>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <a href="{% url 'dashboard' %}" class="btn btn-info">ダッシュボードへ戻る</a>
+                        <a href="{% url 'email_list' %}" class="btn btn-secondary">メール一覧</a>
+                    </div>
+
+                    {% if gmail_account %}
+                        <div class="alert alert-success">
+                            <strong>Googleアカウント連携済み</strong>（安全にトークンが保存されています）
+                        </div>
+                    {% else %}
+                        <div class="alert alert-warning">
+                            Gmailアカウントが連携されていません。下のボタンからGoogleアカウントを連携してください。
+                        </div>
+                    {% endif %}
+
+                    <!-- Google 認証開始ボタン -->
+                    <div class="d-grid gap-2 my-4">
+                        <a href="{% url 'gmail_auth_start' %}" class="btn btn-primary btn-lg">
+                            Googleアカウントと連携する / 再認証
+                        </a>
+                    </div>
+
+                    <div class="mt-4">
+                        <h5>Google連携の手順:</h5>
+                        <ol>
+                            <li>上記の「Googleアカウントと連携する」ボタンをクリックします。</li>
+                            <li>Googleのログインおよびアクセス許可画面が表示されます。</li>
+                            <li>アクセスを許可すると自動的にアプリへ戻り、連携が完了します。</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+```
+
+---
+
+### 2. その他のテンプレートファイルについて
+以下のファイル群（`base.html`, `dashboard.html`, `email_detail.html`, `email_list.html`, `email_processing_list.html`, `email_reply.html`, `email_summary.html`, `keyword_alert_matches.html`, `keyword_alerts.html`）は、ダッシュボードやメール一覧、AI要約・返信案の表示といった既存の機能を引き続きそのまま利用できます[cite: 20, 21, 22, 23, 24, 25, 26, 28, 29]。
+
+---
+
+### 💡 動作確認の流れ
+1. **サーバーの起動**:
+   ```bash
+   python manage.py runserver

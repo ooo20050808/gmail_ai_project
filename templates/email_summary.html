@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h1>メール要約</h1>
+
+<div class="email-summary">
+    <h2>{{ email.subject }}</h2>
+    
+    <table>
+        <tr>
+            <th>送信者:</th>
+            <td>{{ email.sender }}</td>
+        </tr>
+        <tr>
+            <th>受信日時:</th>
+            <td>{{ email.received_at|date:"Y-m-d H:i" }}</td>
+        </tr>
+    </table>
+    
+    <div class="summary-content">
+        <h3>要約:</h3>
+        {% if email.summary %}
+        <p>{{ email.summary|linebreaks }}</p>
+        {% else %}
+        <p class="text-muted">要約を生成できませんでした。Ollamaが起動しているか確認し、「要約を再生成」を試してください。</p>
+        {% endif %}
+    </div>
+    
+    <div class="email-body-preview">
+        <h3>元のメール:</h3>
+        <pre>{{ email.body|truncatewords:50 }}</pre>
+    </div>
+</div>
+
+<div class="actions">
+    <a href="{% url 'email_detail' email.id %}">詳細に戻る</a> |
+    <a href="{% url 'email_list' %}">一覧に戻る</a> |
+    <a href="{% url 'email_reply' email.id %}">返信案を生成</a> |
+    <a href="{% url 'email_summary' email.id %}?regenerate=1">要約を再生成</a>
+</div>
+{% endblock %}
