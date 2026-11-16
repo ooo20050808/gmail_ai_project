@@ -1,8 +1,35 @@
 from django import forms
 from .models import GmailAccount
-# forms.py に追加
 from django.contrib.auth.forms import AuthenticationForm
 from django import forms
+from django.contrib.admin.forms import AdminAuthenticationForm
+from django.contrib.auth import get_user_model
+
+UserModel = get_user_model()
+
+class EmailAdminAuthenticationForm(AdminAuthenticationForm):
+    """
+    管理者サイトで「ユーザー名」の代わりに「メールアドレス」でもログインできるようにするフォーム
+    """
+    def clean(self):
+        username = self.cleaned_data.get('username')
+        password = self.cleaned_data.get('password')
+
+        if username and password:
+            # 入力値に '@' が含まれている場合はメールアドレスとしてユーザーを検索
+            if '@' in username:
+                try:
+                    user_obj = UserModel.objects.get(email__iexact=username)
+                    # 見つかった場合、フォームが期待する username フィールドに実際のユーザー名を代入する
+                    self.cleaned_data['username'] = user_obj.username
+                except UserModel.DoesNotExist:
+                    pass  # 存在しない場合はそのまま親クラスのバリデーションに委ねる（エラーになる）
+                except UserModel.MultipleObjectsReturned:
+                    user_obj = UserModel.objects.filter(email__iexact=username).order_by('id').first()
+                    if user_obj:
+                        self.cleaned_data['username'] = user_obj.username
+
+        return super().clean()
 
 class EmailOrUsernameAuthenticationForm(AuthenticationForm):
     """

@@ -7,7 +7,7 @@ from django.http import HttpRequest
 UserModel = get_user_model()
 
 
-class EmailOrUsernameBackend(ModelBackend):
+class EmailBackend(ModelBackend):
     """
     ユーザー名、またはメールアドレスを使用してユーザー認証を行うためのカスタム認証バックエンド。
     ご提示いただいた堅牢な実装（タイミング攻撃対策など）をベースに、両方のログインに対応させます。
