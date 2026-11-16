@@ -34,6 +34,14 @@
             <!-- ログイン画面エリア -->
             <div class="login-container" style="max-width: 400px; margin: 40px auto; padding: 20px;">
                 <h2>ログイン</h2>
+
+                <!-- フォーム全体の非フィールドエラー（認証失敗などのメッセージ）があれば表示 -->
+                {% if form.non_field_errors %}
+                    <div class="error-messages" style="color: red; margin-bottom: 10px;">
+                        {{ form.non_field_errors }}
+                    </div>
+                {% endif %}
+
                 <form method="post" action="{% url 'login' %}">
                     {% csrf_token %}
                     <!-- リダイレクトループ防止用の next パラメータ保持 -->
@@ -42,13 +50,20 @@
                     {% endif %}
 
                     <div style="margin-bottom: 15px;">
-                        <label for="id_username">ユーザー名:</label><br>
-                        <input type="text" name="username" id="id_username" required style="width: 100%; padding: 8px;">
+                        <!-- form.username には forms.py で設定した「ユーザー名 または メールアドレス」というラベルが反映されます -->
+                        <label for="{{ form.username.id_for_label }}">{{ form.username.label }}:</label><br>
+                        {{ form.username }}
+                        {% if form.username.errors %}
+                            <div style="color: red; font-size: 0.9em;">{{ form.username.errors }}</div>
+                        {% endif %}
                     </div>
 
                     <div style="margin-bottom: 15px;">
-                        <label for="id_password">パスワード:</label><br>
-                        <input type="password" name="password" id="id_password" required style="width: 100%; padding: 8px;">
+                        <label for="{{ form.password.id_for_label }}">{{ form.password.label }}:</label><br>
+                        {{ form.password }}
+                        {% if form.password.errors %}
+                            <div style="color: red; font-size: 0.9em;">{{ form.password.errors }}</div>
+                        {% endif %}
                     </div>
 
                     <button type="submit" style="padding: 8px 16px;">ログイン</button>

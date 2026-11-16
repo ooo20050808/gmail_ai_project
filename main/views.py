@@ -28,6 +28,7 @@ from .forms import GmailAccountForm
 from .models import Email, GmailAccount, KeywordAlert
 from .services.ai_service import FAILED_SUMMARY_MESSAGES, AIService
 from .services.gmail_api_service import GmailApiService
+from .forms import GmailAccountForm, EmailOrUsernameAuthenticationForm
 
 # HTMLメールのスタイルを維持するための許可リスト設定
 ALLOWED_TAGS = [
@@ -189,22 +190,22 @@ def _generate_and_save_summary(email_obj, regenerate=False):
         logger.error(f"メールID {email_obj.id} の要約生成に失敗しました。(APIエラーの可能性)")
         return False
 
-
 def custom_login(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
 
     if request.method == "POST":
-        form = AuthenticationForm(request, data=request.POST)
+        # カスタムフォームに変更
+        form = EmailOrUsernameAuthenticationForm(request, data=request.POST)
         if form.is_valid():
             user = form.get_user()
             login(request, user)
             next_url = request.GET.get("next") or request.POST.get("next") or "dashboard"
             return redirect(next_url)
         else:
-            messages.error(request, "ユーザー名またはパスワードが正しくありません")
+            messages.error(request, "ユーザー名(またはメールアドレス)またはパスワードが正しくありません")
     else:
-        form = AuthenticationForm()
+        form = EmailOrUsernameAuthenticationForm()
 
     return render(request, "base.html", {"form": form})
 

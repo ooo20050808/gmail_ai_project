@@ -45,6 +45,11 @@ INSTALLED_APPS = [
     'main',
 ]
 
+AUTHENTICATION_BACKENDS = [
+    'main.custom_auth_backend.EmailBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 # Django-Qの設定
 # settings.py の Q_CLUSTER を修正
 

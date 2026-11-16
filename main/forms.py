@@ -1,5 +1,17 @@
 from django import forms
 from .models import GmailAccount
+# forms.py に追加
+from django.contrib.auth.forms import AuthenticationForm
+from django import forms
+
+class EmailOrUsernameAuthenticationForm(AuthenticationForm):
+    """
+    ログイン画面のラベルやプレースホルダーを「ユーザー名またはメールアドレス」に変更するフォーム
+    """
+    username = forms.CharField(
+        label="ユーザー名 または メールアドレス",
+        widget=forms.TextInput(attrs={'autofocus': True, 'placeholder': 'ユーザー名 または メールアドレス'})
+    )
 
 
 class GmailAccountForm(forms.ModelForm):
