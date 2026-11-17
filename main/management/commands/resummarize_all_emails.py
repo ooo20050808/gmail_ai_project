@@ -1,55 +1,42 @@
+# resummarize_all_emails.py (自動で失敗分を対象にする安全版)
+
 import time
+import sys
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from main.models import Email
-from main.services.ai_service import AIService
+from main.services.ai_service import AIService, FAILED_SUMMARY_MESSAGES
 
 
 class Command(BaseCommand):
-    help = "データベース内のすべてのメールに対してAIによる再要約とカテゴリ再分類を実行します。"
+    help = "要約が失敗している、または未処理のメールに対してAIによる再要約とカテゴリ再分類を自動実行します。"
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--user-id",
-            type=int,
-            help="特定のユーザーIDのメールのみを再要約する場合に指定します。",
-        )
-        parser.add_argument(
-            "--box",
-            type=str,
-            help="特定のフォルダ（inbox, sent, junk, trash など）のみを対象にする場合に指定します。",
-        )
-        parser.add_argument(
             "--batch-size",
             type=int,
-            default=10,
-            help="1回のバッチ処理で処理する件数（デフォルト: 10）",
+            default=3,
+            help="1回のバッチ処理で処理する件数（デフォルト: 3）",
         )
 
     def handle(self, *args, **options):
-        user_id = options.get("user_id")
-        box_type = options.get("box")
         batch_size = options.get("batch_size")
 
-        queryset = Email.objects.all().order_by("-received_at")
-
-        if user_id:
-            User = get_user_model()
-            if not User.objects.filter(id=user_id).exists():
-                self.stderr.write(self.style.ERROR(f"指定されたユーザーID ({user_id}) は存在しません。"))
-                return
-            queryset = queryset.filter(user_id=user_id)
-
-        if box_type:
-            queryset = queryset.filter(gmail_box=box_type)
+        # シェルで確認された失敗メッセージ入り、または未要約のメールのみを自動ターゲットにする
+        queryset = Email.objects.filter(
+            Q(summary__isnull=True) |
+            Q(summary="") |
+            Q(summary__in=FAILED_SUMMARY_MESSAGES)
+        ).order_by("-received_at")
 
         total_count = queryset.count()
         if total_count == 0:
-            self.stdout.write(self.style.WARNING("再要約対象のメールが見つかりませんでした。"))
+            self.stdout.write(self.style.SUCCESS("対象となるメールはありません。すべてのメールが正常に要約されています！"))
             return
 
-        self.stdout.write(self.style.SUCCESS(f"全 {total_count} 件のメールの再要約・再分類を開始します..."))
+        self.stdout.write(self.style.SUCCESS(f"要約が必要なメール全 {total_count} 件の再要約・再分類を開始します..."))
 
         ai_service = AIService(diagnose=True)
         email_list = list(queryset)
@@ -68,18 +55,17 @@ class Command(BaseCommand):
                 for email in chunk
             ]
 
+            batch_results = {}
             try:
                 batch_results = ai_service.analyze_emails_batch(chunk_data)
             except Exception as e:
-                self.stderr.write(self.style.ERROR(f"バッチ解析中に例外が発生しました: {e}"))
-                batch_results = {}
+                self.stderr.write(self.style.ERROR(f"\n[警告] バッチ解析中に例外が発生しました（個別解析へフォールバックします）: {e}"))
 
             for email in chunk:
                 try:
-                    if email.id in batch_results:
+                    if email.id in batch_results and batch_results[email.id]:
                         category, summary = batch_results[email.id]
                     else:
-                        # バッチ処理の結果から漏れた場合は個別解析へフォールバック
                         category, summary = ai_service.analyze_email(
                             email.subject, email.body, sender=email.sender
                         )
@@ -89,16 +75,21 @@ class Command(BaseCommand):
                         email.summary = summary
                         email.save(update_fields=["category", "summary"])
 
-                    processed_count += 1
+                    if summary in FAILED_SUMMARY_MESSAGES:
+                        error_count += 1
+                    else:
+                        processed_count += 1
                 except Exception as e:
                     error_count += 1
-                    self.stderr.write(self.style.ERROR(f"メールID {email.id} の保存エラー: {e}"))
+                    self.stderr.write(self.style.ERROR(f"\n[エラー] メールID {email.id} の保存エラー: {e}"))
 
-            self.stdout.write(f"進捗: {min(i + batch_size, total_count)} / {total_count} 件完了")
+            completed_so_far = min(i + batch_size, total_count)
+            sys.stdout.write(f"\r進捗: {completed_so_far} / {total_count} 件完了 (成功: {processed_count}, 失敗/エラー: {error_count})")
+            sys.stdout.flush()
             time.sleep(0.1)
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"処理完了！ 成功: {processed_count} 件 / エラー: {error_count} 件"
+                f"\n\n処理完了！ 成功: {processed_count} 件 / 失敗・エラー: {error_count} 件"
             )
         )

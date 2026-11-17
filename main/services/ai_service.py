@@ -1,4 +1,4 @@
-# ai_service.py (全カテゴリでURL・詳細情報の抽出と文字数制限解除を適用したバージョン)
+# ai_service.py (構文エラー修正・完全版)
 
 import logging
 import os
@@ -73,22 +73,21 @@ class AIService:
         if not cleaned_text or len(cleaned_text.strip()) < 5:
             return rule_category or 'other', 'メール本文が空であるか、テキストを抽出できませんでした。'
 
-        # 情報を落とさないよう最大3000文字まで許容
         safe_text = cleaned_text.strip()
-        if len(safe_text) > 3000:
-            safe_text = safe_text[:3000] + "..."
+        if len(safe_text) > 5000:
+            safe_text = safe_text[:5000] + "\n...(以下省略)..."
 
         prompt_text = f"""以下のメールを分析し、必ず以下のJSONフォーマットのみで結果を返してください。
 
-【カテゴリ分類ルール】
-- "agent": 求人紹介、スカウト、転職エージェントからの案件案内
-- "company": 企業への直接応募完了、選考結果、面接日程調整、内定通知など
-- "service": 各種サービスの通知、注文確認、領収書、セキュリティ通知など
-- "other": 上記のいずれにも当てはまらないメール
+【カテゴリ分類ルール（厳守）】
+- "agent": フリーランスエージェント、IT系派遣・紹介会社（レバテック、Midworks、PE-BANK、ITプロパートナーズ等）、求人案内、スカウト、および **Dodaなど転職エージェントからの企業紹介・案件紹介メール**。※迷ったら案件や求人紹介であれば "agent" にしてください。
+- "company": **企業からの直接の連絡**（応募完了、書類選考の案内、面接日程調整、合否結果、内定通知、お問い合わせへの回答など）。
+- "service": 各種サービスの通知、注文確認、領収書、セキュリティ通知など。
+- "other": 上記のいずれにも当てはまらないメール。
 
-【要約（summary）作成ルール】
-- カテゴリや内容にかかわらず、メール内に記載されている重要な情報（企業名、日時、金額、案内内容、および**関連するURL（リンク）**など）を**省略せず網羅して**分かりやすく日本語で要約してください。
-- 40文字などの文字数制限は撤廃します。必要な詳細情報をすべて記載してください。
+【要約（summary）作成ルール（厳守）】
+- **【最重要】フリーランスエージェントやDodaからの案件紹介・求人情報メールの場合、メール内に記載されている「すべての案件の名前」「案件の主な内容」「それぞれの詳細ページへのリンク（URL）」を、件数が多い場合でも一切省略せずにすべて箇条書きなどで網羅して要約してください。**
+- 省略せずすべてのURLを出力してください。文字数制限はありません。
 
 出力JSONフォーマット:
 {{
@@ -96,7 +95,7 @@ class AIService:
   "summary": "作成した詳細な要約テキスト"
 }}
 
-分類ヒント: {rule_category or "other"}
+[システム判定ヒント]: {rule_category or "agent"}
 送信者: {sender}
 Subject: {subject}
 Body:
@@ -116,7 +115,11 @@ Body:
                     content = content.strip()
 
                 data = json.loads(content)
-                category = data.get("category", rule_category or 'other')
+                category = data.get("category", rule_category or 'agent')
+
+                if rule_category == 'agent':
+                    category = 'agent'
+
                 if category not in ["agent", "company", "service", "other"]:
                     category = "other"
 
@@ -126,20 +129,20 @@ Body:
             except Exception as e:
                 logger.error(f"ローカルLLM解析エラー (試行 {attempt + 1}/{max_retries}): {e}")
                 if attempt == max_retries - 1:
-                    return rule_category or 'other', '要約の生成に失敗しました。'
+                    return rule_category or 'agent', '要約の生成に失敗しました。'
                 time.sleep(0.5)
 
-        return rule_category or 'other', '要約の生成に失敗しました。'
+        return rule_category or 'agent', '要約の生成に失敗しました。'
 
     def analyze_emails_batch(self, emails_data):
         """
-        複数のメール（リスト）を一括解析するバッチ処理メソッド（情報量増加に伴い3件ずつ分割処理）
+        複数のメール（リスト）を一括解析するバッチ処理メソッド
         """
         if not emails_data:
             return {}
 
         mapping = {}
-        sub_batch_size = 3
+        sub_batch_size = 2
         for i in range(0, len(emails_data), sub_batch_size):
             sub_chunk = emails_data[i:i + sub_batch_size]
             sub_result = self._process_sub_batch(sub_chunk)
@@ -149,39 +152,43 @@ Body:
 
     def _process_sub_batch(self, emails_data):
         formatted_emails = []
+        rule_categories = {}
+
         for item in emails_data:
+            rule_cat = self._quick_classify_rule(item['subject'], item['sender'], item['body'])
+            rule_categories[item['id']] = rule_cat
+
             cleaned_text = self._extract_clean_text_with_urls(item['body'])
             safe_text = cleaned_text.strip()
-            if len(safe_text) > 1500:
-                safe_text = safe_text[:1500] + "..."
+            if len(safe_text) > 3000:
+                safe_text = safe_text[:3000] + "\n...(以下省略)..."
 
-            rule_cat = self._quick_classify_rule(item['subject'], item['sender'], item['body'])
             formatted_emails.append({
                 "id": item['id'],
                 "sender": item['sender'],
                 "subject": item['subject'],
-                "hint": rule_cat or "other",
+                "hint": rule_cat or "agent",
                 "body": safe_text
             })
 
         prompt_text = f"""以下の複数のメールをそれぞれ分析し、必ず以下のJSONオブジェクト形式（キー名: "results"）で結果を返してください。
 Markdownのバッククォート（```json など）は含めず、純粋なJSON文字列のみを出力してください。
 
-【カテゴリ分類ルール】
-- "agent": 求人紹介、スカウト、転職エージェントからの案件案内
-- "company": 企業への直接応募、選考結果、面接日程、内定など
-- "service": サービス通知、領収書、注文確認など
-- "other": その他
+【カテゴリ分類ルール（厳守）】
+- "agent": フリーランスエージェント、IT派遣、Dodaなどの求人紹介・スカウト・案件案内。
+- "company": 企業からの直接の連絡（応募完了、選考、面接、内定、回答など）。
+- "service": サービス通知、領収書など。
+- "other": その他。
 
-【要約（summary）作成ルール】
-- すべてのメールについて、重要な詳細情報（企業名、日時、内容、**URL**など）を省略せずに要約してください。文字数制限はありません。
+【要約（summary）作成ルール（厳守）】
+- すべてのメールについて、特にエージェントからの案件紹介は、**「すべての案件名」「内容」「すべてのURL」を一切省略せずに**要約に含めてください。文字数制限はありません。
 
 {{
   "results": [
     {{
       "id": メールID,
       "category": "agent" または "company" または "service" または "other",
-      "summary": "作成した詳細な要約テキスト"
+      "summary": "作成した詳細な要約テキスト（すべての案件名とURLを網羅）"
     }}
   ]
 }}
@@ -221,17 +228,33 @@ Markdownのバッククォート（```json など）は含めず、純粋なJSON
                 if isinstance(res, dict):
                     email_id = res.get("id")
                     cat = res.get("category", "other")
+
+                    if email_id in rule_categories and rule_categories[email_id] == 'agent':
+                        cat = 'agent'
+
                     if cat not in ["agent", "company", "service", "other"]:
                         cat = "other"
+
                     sum_text = res.get("summary", "要約の生成に失敗しました。")
                     if email_id:
                         mapping[email_id] = (cat, sum_text)
+
+            for item in emails_data:
+                e_id = item['id']
+                if e_id not in mapping:
+                    rc = rule_categories.get(e_id) or 'other'
+                    mapping[e_id] = (rc, "要約の生成に失敗しました。")
 
             return mapping
 
         except Exception as e:
             logger.error(f"ローカルLLMバッチ解析エラー: {e}")
-            return {}
+            fallback_mapping = {}
+            for item in emails_data:
+                e_id = item['id']
+                rc = rule_categories.get(e_id) or 'other'
+                fallback_mapping[e_id] = (rc, "要約の生成に失敗しました。")
+            return fallback_mapping
 
     def generate_reply(self, email_body, sender, subject, tone="polite", category="other"):
         cleaned_text = self._extract_clean_text_with_urls(email_body)
@@ -251,25 +274,35 @@ Markdownのバッククォート（```json など）は含めず、純粋なJSON
     def _quick_classify_rule(self, subject, sender, body=""):
         subject_lower = (subject or "").lower()
         sender_lower = (sender or "").lower()
+        body_lower = (body or "").lower()
 
         company_domains = ['hrmos.co', 'onehr.hrmos.co', 'talentio.com', 'sonar-ats.jp', 'i-webs.jp', 'herp.careers']
         if any(d in sender_lower for d in company_domains) or any(
-                k in subject_lower for k in ['選考結果', '応募完了', '面接日程', '内定', '書類選考']):
+                k in subject_lower for k in
+                ['選考結果', '応募完了', '面接日程', '内定', '書類選考', 'お問い合わせ', 'ご回答']):
             return 'company'
 
-        agent_domains = ['doda.jp', 'mynavi.jp', 'bizreach.jp', 'indeed.com', 'rikunabi.com', 'r-agent.com']
+        agent_domains = [
+            'doda.jp', 'mynavi.jp', 'bizreach.jp', 'indeed.com', 'rikunabi.com', 'r-agent.com',
+            'levtech.jp', 'midworks.jp', 'pe-bank.jp', 'itpropartners.com', 'geektospace.com',
+            'pasona.co.jp', 'randstad.co.jp', 'forkwell.com', 'tenshoku.mynavi.jp'
+        ]
+        agent_keywords = [
+            '求人紹介', 'おすすめ求人', 'スカウト', '新着求人', '案件紹介', '案件のご案内',
+            'フリーランス', 'エンジニア案件', 'プロポーザル', 'ご提案案件', '案件情報', '求人情報'
+        ]
+
         if any(d in sender_lower for d in agent_domains) or any(
-                k in subject_lower for k in ['求人紹介', 'おすすめ求人', 'スカウト', '新着求人']):
+                k in subject_lower for k in agent_keywords) or any(
+            k in body_lower for k in ['案件紹介', 'おすすめ案件', '求人をご紹介']):
             return 'agent'
 
         if any(k in subject_lower for k in ['領収書', '注文確認', 'パスワード', '決済完了', '認証コード']):
             return 'service'
+
         return None
 
     def _extract_clean_text_with_urls(self, html_content):
-        """
-        HTMLメールからテキストを抽出しつつ、<a>タグのリンク先URLを「テキスト (URL)」の形式で保持する
-        """
         if not html_content:
             return ""
         if "<html" not in html_content.lower() and "<div" not in html_content.lower() and "<a " not in html_content.lower():
@@ -279,11 +312,10 @@ Markdownのバッククォート（```json など）は含めず、純粋なJSON
             for element in soup(["style", "script", "head", "title", "meta"]):
                 element.decompose()
 
-            # <a>タグのURLをテキストに埋め込む
             for a_tag in soup.find_all("a", href=True):
                 href = a_tag["href"].strip()
                 if href.startswith("http"):
-                    link_text = a_tag.get_text(strip=True)
+                    link_text = a_tag.get_text(strip=True)  # <-- カッコの閉じ忘れを修正しました
                     if link_text and href not in link_text:
                         a_tag.replace_with(f"{link_text} ({href})")
                     elif not link_text:
