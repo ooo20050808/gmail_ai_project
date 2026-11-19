@@ -109,6 +109,9 @@ class Email(models.Model):
   sender = models.CharField(max_length=255)
   body = models.TextField()
   summary = models.TextField(blank=True, null=True)
+  summarized_at = models.DateTimeField(
+      blank=True, null=True, db_index=True, verbose_name="要約日時"
+  )
   reply_draft = models.TextField(blank=True, null=True)
   priority = models.CharField(
       max_length=10, choices=PRIORITY_CHOICES, default="medium"
