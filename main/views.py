@@ -172,23 +172,25 @@ def _generate_and_save_summary(email_obj, regenerate=False):
         return True
 
     ai_service = AIService()
-    category = ai_service.classify_email_category(
-        email_obj.subject, email_obj.body, sender=email_obj.sender
+    category, summary = ai_service.analyze_email(
+        subject=email_obj.subject,
+        email_body=email_obj.body,
+        sender=email_obj.sender,
     )
 
-    email_obj.category = category
-    email_obj.save(update_fields=["category"])
-
-    summary = ai_service.generate_summary(email_obj.body, category=category, sender=email_obj.sender)
-    if summary:
+    if summary and summary not in FAILED_SUMMARY_MESSAGES:
+        email_obj.category = category
         email_obj.summary = summary
-        email_obj.save(update_fields=["summary"])
+        email_obj.summarized_at = timezone.now()
+        email_obj.save(update_fields=["category", "summary", "summarized_at"])
         return True
-    else:
-        email_obj.summary = "失敗: AI要約を生成できませんでした。"
-        email_obj.save(update_fields=["summary"])
-        logger.error(f"メールID {email_obj.id} の要約生成に失敗しました。(APIエラーの可能性)")
-        return False
+
+    email_obj.category = category or email_obj.category
+    email_obj.summary = summary or "要約の生成に失敗しました。"
+    email_obj.summarized_at = timezone.now()
+    email_obj.save(update_fields=["category", "summary", "summarized_at"])
+    logger.error(f"メールID {email_obj.id} の要約生成に失敗しました。")
+    return False
 
 def custom_login(request):
     if request.user.is_authenticated:
@@ -367,11 +369,17 @@ def email_reply(request, email_id):
     tone = request.GET.get("tone", "polite")
     if not email.reply_draft or request.GET.get("regenerate"):
         ai_service = AIService()
-        category = (
-            email.category
-            if email.category and email.category != "other"
-            else ai_service.classify_email_category(email.subject, email.body, sender=email.sender)
-        )
+        category = email.category
+        if not category or category == "other":
+            detected_category, _ = ai_service.analyze_email(
+                subject=email.subject,
+                email_body=email.body,
+                sender=email.sender,
+            )
+            category = detected_category or email.category or "other"
+            email.category = category
+            email.save(update_fields=["category"])
+
         email.reply_draft = ai_service.generate_reply(
             email.body,
             email.sender,
