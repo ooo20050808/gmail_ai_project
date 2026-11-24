@@ -1,8 +1,7 @@
-# resummarize_all_emails.py (要約日時記録・進捗確実カウント版)
+# resummarize_all_emails.py (全件ルール再適用・要約日時記録・進捗確実カウント版)
 
 import os
 import time
-import sys
 from datetime import timedelta
 from dotenv import load_dotenv
 from django.core.management.base import BaseCommand
@@ -16,8 +15,15 @@ from main.services.ai_service import AIService, DEFAULT_MODEL, FAILED_SUMMARY_ME
 load_dotenv()
 
 
+def _is_failed_summary(summary: str) -> bool:
+    if not summary:
+        return True
+    s = summary.strip()
+    return not s or s.startswith("失敗") or s in FAILED_SUMMARY_MESSAGES
+
+
 class Command(BaseCommand):
-    help = "現在受信しているすべてのメールに対してAIによる再要約とカテゴリ再分類を実行し、完了日時を記録します。"
+    help = "受信しているすべてのメールに対して、最新の分類・要約ルールに基づきAI再要約とカテゴリ再分類を実行します。"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -38,6 +44,18 @@ class Command(BaseCommand):
             help="指定した時間（時間単位）以内に既に再要約済みのメールをスキップして続きから実行します（例: --skip-recent-hours 24）",
         )
         parser.add_argument(
+            "--category",
+            type=str,
+            default=None,
+            choices=["agent", "company", "other"],
+            help="特定のカテゴリのメールのみ再要約したい場合に指定（agent / company / other）",
+        )
+        parser.add_argument(
+            "--exclude-trash",
+            action="store_true",
+            help="ゴミ箱（gmail_box='trash'）のメールを除外して再要約します",
+        )
+        parser.add_argument(
             "--model",
             type=str,
             default=None,
@@ -51,6 +69,8 @@ class Command(BaseCommand):
         batch_size = options.get("batch_size")
         only_failed = options.get("only_failed")
         skip_recent_hours = options.get("skip_recent_hours")
+        target_category = options.get("category")
+        exclude_trash = options.get("exclude_trash")
 
         # 優先順位: コマンドライン引数 --model > .env (OLLAMA_MODEL) > DEFAULT_MODEL
         env_model = (os.getenv("OLLAMA_MODEL") or "").strip()
@@ -59,14 +79,21 @@ class Command(BaseCommand):
         # コマンド実行開始時刻を記録
         run_started_at = timezone.now()
 
-        # 対象クエリセットの構築
+        # 対象クエリセットの構築（デフォルトは全メールを対象に新ルールで再要約）
         queryset = Email.objects.all().order_by("-received_at")
+
+        if exclude_trash:
+            queryset = queryset.exclude(gmail_box="trash")
+
+        if target_category:
+            queryset = queryset.filter(category=target_category)
 
         if only_failed:
             queryset = queryset.filter(
                 Q(summary__isnull=True) |
                 Q(summary="") |
-                Q(summary__in=FAILED_SUMMARY_MESSAGES)
+                Q(summary__startswith="失敗") |
+                Q(summary__in=list(FAILED_SUMMARY_MESSAGES))
             )
         elif skip_recent_hours > 0:
             cutoff = run_started_at - timedelta(hours=skip_recent_hours)
@@ -83,10 +110,12 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"使用モデル [{target_model}] で対象メール全 {total_count} 件の再要約・再分類を開始します..."
+                f"使用モデル [{target_model}] で対象メール全 {total_count} 件の"
+                f"新ルールに基づく再要約・再分類を開始します..."
             )
         )
 
+        # 新ルールが実装された AIService を初期化
         ai_service = AIService(model=target_model, diagnose=True)
         completed_count = 0
         processed_count = 0
@@ -122,19 +151,20 @@ class Command(BaseCommand):
                     if email.id in batch_results and batch_results[email.id]:
                         category, summary = batch_results[email.id]
 
-                    if not summary or summary in FAILED_SUMMARY_MESSAGES:
+                    # バッチ結果が未取得または失敗文言の場合は個別解析で再試行
+                    if _is_failed_summary(summary):
                         category, summary = ai_service.analyze_email(
                             email.subject, email.body, sender=email.sender
                         )
 
-                    # DBへの保存（summarized_at に現在時刻を記録）
+                    # DBへの保存（新ルールのカテゴリ・要約・実行日時で上書き更新）
                     with transaction.atomic():
-                        email.category = category
+                        email.category = category or email.category or "other"
                         email.summary = summary
                         email.summarized_at = timezone.now()
                         email.save(update_fields=["category", "summary", "summarized_at"])
 
-                    if summary in FAILED_SUMMARY_MESSAGES:
+                    if _is_failed_summary(summary):
                         error_count += 1
                     else:
                         processed_count += 1
@@ -146,7 +176,6 @@ class Command(BaseCommand):
                     )
                 finally:
                     completed_count += 1
-                    # バッファリングで出力が止まらないよう print(..., flush=True) を使用
                     print(
                         f"\r進捗: {completed_count} / {total_count} 件完了 "
                         f"(成功: {processed_count}, 失敗/エラー: {error_count})",

@@ -67,10 +67,18 @@ def _escape_newlines_in_json_strings(raw: str) -> str:
 
 class EmailAnalysisSchema(BaseModel):
     category: Literal["agent", "company", "other"] = Field(
-        description="メールのカテゴリ。必ず指定された3つのいずれか1つを選択してください。"
+        description=(
+            "メールのカテゴリ。"
+            "agent: フリーランスエージェント・求人紹介会社・求人サイト等、"
+            "company: 企業・取引先からの直接連絡、"
+            "other: サービス・システムのお知らせ・その他メール"
+        )
     )
     summary: str = Field(
-        description="メールの要約。すべてのカテゴリでURLや重要な詳細情報を省略せず記載。"
+        description=(
+            "メールの要約。エージェントメールの場合はすべての案件の"
+            "タイトル・案件内容・案件詳細URLを省略せず記載。"
+        )
     )
 
 
@@ -82,8 +90,9 @@ class AIService:
         target_model = model or env_model or DEFAULT_MODEL
         self.model = target_model
 
-        num_ctx = _get_env_int("OLLAMA_NUM_CTX", 2048)
-        num_predict = _get_env_int("OLLAMA_NUM_PREDICT", 1024)
+        # 複数案件＋URLを省略せず出力できるよう、デフォルトの予測トークン・コンテキストに余裕を持たせる
+        num_ctx = _get_env_int("OLLAMA_NUM_CTX", 4096)
+        num_predict = _get_env_int("OLLAMA_NUM_PREDICT", 1536)
         num_thread = _get_env_int("OLLAMA_NUM_THREAD", max(1, (os.cpu_count() or 4) - 1))
 
         self.llm = ChatOllama(
@@ -169,7 +178,6 @@ class AIService:
             if extracted_sum:
                 return {"category": extracted_cat, "summary": extracted_sum}
 
-        # 最後のjson.loadsエラーを発生させて呼び出し元のリトライに乗せる
         parsed = json.loads(content)
         return parsed if isinstance(parsed, dict) else {}
 
@@ -186,21 +194,29 @@ class AIService:
             safe_sender = (sender or "不明な送信者").strip()
             return rule_category or 'other', f"【件名】{safe_subject}（送信者: {safe_sender} / 本文テキストなし）"
 
+        # 複数案件のタイトル・内容・URLを取りこぼさないよう十分な文字数を保持
         safe_text = cleaned_text.strip()
-        if len(safe_text) > 2200:
-            safe_text = safe_text[:2200] + "\n...(以下省略)..."
+        if len(safe_text) > 4500:
+            safe_text = safe_text[:4500] + "\n...(以下省略)..."
 
         prompt_text = f"""以下のメールを分析し、必ず有効なJSONオブジェクト1つのみで結果を返してください。
 JSON文字列内の改行は必ず \\n にエスケープし、ダブルクォーテーションは \\" にエスケープしてください。
 
 【カテゴリ分類ルール（厳守）】
-- "agent": フリーランスエージェント、転職エージェント、求人サイト・求人サービス（doda、エンゲージ、リクルート、マイナビ、レバテック等）、IT系派遣・紹介会社からの求人紹介、案件紹介、スカウト、面談案内などのメール。
+- "agent": フリーランスエージェント、転職エージェント、求人紹介会社、求人サイト・求人サービス（doda、エンゲージ、リクルート、マイナビ、レバテック等）、IT系派遣・紹介会社からの求人紹介、案件紹介、スカウト、面談案内などのメール。（既存の分類ルールを維持）
 - "company": 企業やその企業の担当者からの直接の連絡（企業の採用担当・人事・現場担当者からの選考/面接/内定連絡、企業や取引先担当者からの直接のビジネス・業務連絡など）。※エージェントや求人サイト経由の仲介メールは "agent" とすること。
-- "other": 上記以外のメール。各種Webサービスの通知、システム通知・自動送信メール、注文確認、領収書、セキュリティ/認証通知、ニュースレター、および家族・友人・知人などプライベートな連絡はすべて "other" とすること。
+- "other": 「サービス・システムのお知らせ」および上記以外のメール。各種Webサービス・システムからの通知（メンテナンス、機能追加、利用案内、重要なお知らせ、自動送信メール、注文確認、領収書、セキュリティ/認証通知、ニュースレター等）や、家族・友人・知人などのプライベート連絡はすべて "other" とすること。
 
 【要約（summary）作成ルール（厳守）】
-- エージェントからの案件紹介・求人情報メールの場合、記載されている「すべての案件名」「主な内容」「詳細ページURL」を省略せず箇条書きで網羅してください。
-- それ以外のメールも重要な詳細情報やURLを省略せず簡潔かつ正確にまとめてください。
+1. エージェント（フリーランスエージェント・求人紹介会社・求人サイト等）からのメールの場合：
+   - メール内に記載されている「すべての案件」を1件も取りこぼさず列挙してください。
+   - 各案件について、必ず以下の3点を漏れなく含めてください：
+     ・案件タイトル（案件名・求人名）
+     ・案件の内容（業務内容、開発環境/スキル、単価・条件、勤務形態などの要点）
+     ・案件詳細のURL（本文・リンクに存在する該当案件の詳細ページURLを省略・改変せずそのまま記載。URLがない案件のみ「URL記載なし」と明記）
+   - 複数案件がある場合も「1件目」「2件目」のようにすべて出力し、「他〇件」などの省略表現は使わないでください。
+2. 「サービス・システムのお知らせ」やその他のメールの場合：
+   - 対象となるサービス・システム名、お知らせの要旨、期限・対応事項、関連URLを簡潔かつ正確に記載してください。
 
 出力JSONフォーマット:
 {{
@@ -216,8 +232,8 @@ JSON文字列内の改行は必ず \\n にエスケープし、ダブルクォ�
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                # 2回目のリトライ時は本文を短縮してコンテキスト溢れ・JSON崩れを回避
-                current_prompt = prompt_text if attempt == 0 else prompt_text.replace(safe_text, safe_text[:800])
+                # 2回目のリトライ時も案件・URL情報をできるだけ残すため1800文字まで保持
+                current_prompt = prompt_text if attempt == 0 else prompt_text.replace(safe_text, safe_text[:1800])
                 messages = [HumanMessage(content=current_prompt)]
                 response = self.structured_chain.invoke(messages)
                 data = self._parse_json_response(response.content)
@@ -302,6 +318,7 @@ JSON文字列内の改行は必ず \\n にエスケープし、ダブルクォ�
         sender_lower = (sender or "").lower()
         body_lower = (body or "").lower()
 
+        # エージェント分類ルール（既存を維持）
         agent_domains = [
             'doda.jp', 'en-gage.com', 'enjapan.com', 'mynavi.jp', 'bizreach.jp',
             'indeed.com', 'rikunabi.com', 'r-agent.com', 'levtech.jp', 'midworks.jp',
@@ -323,12 +340,15 @@ JSON文字列内の改行は必ず \\n にエスケープし、ダブルクォ�
         ):
             return 'agent'
 
-        other_keywords = [
+        # サービス・システムのお知らせ / その他通知系ルール
+        service_notice_keywords = [
+            'サービス・システムのお知らせ', 'システムのお知らせ', 'サービスのお知らせ',
+            'お知らせ', 'メンテナンス', 'アップデート', '仕様変更', '利用規約',
             '領収書', '注文確認', 'パスワード', '決済完了', '認証コード', 'ワンタイム',
             'システム通知', 'サービス通知', '自動送信', '配信停止', 'noreply',
             'no-reply', 'mailer-daemon', '家族', 'お父さん', 'お母さん', '父より', '母より',
         ]
-        if any(k in sender_lower for k in other_keywords) or any(k in subject_lower for k in other_keywords):
+        if any(k in sender_lower for k in service_notice_keywords) or any(k in subject_lower for k in service_notice_keywords):
             return 'other'
 
         company_domains = [
@@ -364,14 +384,16 @@ JSON文字列内の改行は必ず \\n にエスケープし、ダブルクォ�
 
             for a_tag in soup.find_all("a", href=True):
                 href = a_tag["href"].strip()
-                if href.startswith("http"):
-                    link_text = a_tag.get_text(strip=True)
+                if href.startswith(("http://", "https://")):
+                    link_text = re.sub(r'\s+', ' ', a_tag.get_text(" ", strip=True))
                     if link_text and href not in link_text:
-                        a_tag.replace_with(f"{link_text} ({href})")
+                        a_tag.replace_with(f"{link_text} [URL: {href}]")
                     elif not link_text:
-                        a_tag.replace_with(f"({href})")
+                        a_tag.replace_with(f"[URL: {href}]")
 
             text = soup.get_text(separator='\n', strip=True)
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            text = "\n".join(lines)
             text = re.sub(r'\n{3,}', '\n\n', text)
             return text
         except Exception:
