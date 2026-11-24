@@ -229,8 +229,10 @@ def gmail_settings(request):
     except GmailAccount.DoesNotExist:
         gmail_account = None
         initial_data = None
+
     if request.method == "POST":
-        form = GmailAccountForm(request.POST, instance=account)
+        # 【修正】未定義だった account を gmail_account に変更
+        form = GmailAccountForm(request.POST, instance=gmail_account)
         if form.is_valid():
             new_account = form.save(commit=False)
             new_account.user = request.user
@@ -241,12 +243,13 @@ def gmail_settings(request):
                 f = Fernet(key)
                 new_account.app_password = f.encrypt(raw_password.encode()).decode()
             elif gmail_account:
-                new_account.app_password = account.app_password
+                new_account.app_password = gmail_account.app_password
             new_account.save()
             messages.success(request, "Gmailの接続設定を保存しました。")
             return redirect("dashboard")
     else:
         form = GmailAccountForm(initial=initial_data)
+
     return render(request, "gmail_settings.html", {"form": form, "gmail_account": gmail_account})
 
 
@@ -390,22 +393,27 @@ def email_reply(request, email_id):
         email.save(update_fields=["reply_draft"])
     return render(request, "email_reply.html", {"email": email, "tone": tone})
 
-
-# views.py の該当部分 (fetch_emails)
-
 @login_required
 def fetch_emails(request):
     box_type = request.GET.get("box", "inbox")
     tab_type = request.GET.get("tab", "primary")
 
     try:
-        gmail_account = GmailAccount.objects.get(user=request.user)
+        GmailAccount.objects.get(user=request.user)
     except GmailAccount.DoesNotExist:
         messages.warning(request, "Gmailアカウントが設定されていません。")
         return redirect("gmail_settings")
 
-    existing_ids = list(Email.objects.filter(user=request.user, gmail_box=box_type).values_list("id", flat=True))
+    user_box_emails = Email.objects.filter(user=request.user, gmail_box=box_type)
+    existing_ids = list(user_box_emails.values_list("id", flat=True))
+    latest_email = user_box_emails.order_by("-received_at").first()
+    latest_timestamp = int(latest_email.received_at.timestamp()) if latest_email and latest_email.received_at else None
+
     request.session["initial_existing_ids"] = existing_ids
+    request.session["last_known_received_ts"] = latest_timestamp
+    request.session["processing_box"] = box_type
+    request.session["processing_tab"] = tab_type
+    request.session["is_fetching_background"] = True
 
     fetch_limit = getattr(settings, "GMAIL_FETCH_LIMIT", 500)
 
@@ -415,20 +423,16 @@ def fetch_emails(request):
         box_type,
         tab_type,
         limit=fetch_limit,
+        newer_than_timestamp=latest_timestamp,
     )
 
-    request.session["processing_box"] = box_type
-    request.session["processing_tab"] = tab_type
-    request.session["is_fetching_background"] = True
-
     messages.info(request, "メールのバックグラウンド同期とAI解析を開始しました。一覧画面で進捗を確認できます。")
-
-    # 【変更】処理詳細画面(/emails/processing/)ではなく、メール一覧画面へ直接リダイレクトする
     return redirect(f"/emails/?box={box_type}&tab={tab_type}")
-
 
 @login_required
 def email_list(request):
+    from django.db.models import Max
+
     box_type = request.GET.get("box", "inbox")
     tab_type = request.GET.get("tab", "primary")
 
@@ -454,23 +458,36 @@ def email_list(request):
         else:
             emails = emails.filter(tab_category=tab_type)
 
-    # --- 【修正ポイント】同じthread_idを持つメールをグループ化し、最新の1件だけを一覧に表示 ---
-    # スレッドIDごとに最新のID（または最新の受信日時）を取得
-    from django.db.models import Max
-
-    # 1. 各thread_idの最新メールIDを特定
+    # 【改善】フィルタ適用後のクエリセット内で thread_id ごとの最新IDを取得
+    # thread_id が空の場合は id 単位で扱うため、Coalesce やフォールバックを考慮
     latest_email_ids = (
-        emails.values('thread_id')
-        .annotate(latest_id=Max('id'))
-        .values_list('latest_id', flat=True)
+        emails.exclude(thread_id__isnull=True)
+        .exclude(thread_id="")
+        .values("thread_id")
+        .annotate(latest_id=Max("id"))
+        .values_list("latest_id", flat=True)
     )
-
-    # 2. 最新のメールレコードのみに絞り込む
-    emails = emails.filter(id__in=latest_email_ids)
+    no_thread_ids = (
+        emails.filter(Q(thread_id__isnull=True) | Q(thread_id=""))
+        .values_list("id", flat=True)
+    )
+    combined_ids = list(latest_email_ids) + list(no_thread_ids)
+    emails = emails.filter(id__in=combined_ids)
 
     # --- ステータスバー・プログレス表示用の計算ロジック ---
     is_fetching = request.session.get("is_fetching_background", False)
     target_ids = cache.get(f"processing_email_ids_{request.user.id}")
+
+    # キャッシュに未反映でも、initial_existing_ids 以降に新規作成されたメールがあれば拾う
+    initial_ids = set(request.session.get("initial_existing_ids") or [])
+    if not target_ids and initial_ids:
+        newly_created_ids = list(
+            Email.objects.filter(user=request.user, gmail_box=box_type)
+            .exclude(id__in=initial_ids)
+            .values_list("id", flat=True)
+        )
+        if newly_created_ids:
+            target_ids = newly_created_ids
 
     total_count = 0
     completed_count = 0
@@ -487,6 +504,7 @@ def email_list(request):
         if completed_count >= total_count and total_count > 0:
             cache.delete(f"processing_email_ids_{request.user.id}")
             request.session.pop("is_fetching_background", None)
+            request.session.pop("initial_existing_ids", None)
             is_fetching = False
 
     emails = emails.select_related("gmail_account").order_by("-received_at", "-id")

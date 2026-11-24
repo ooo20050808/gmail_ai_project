@@ -37,6 +37,34 @@ def _get_env_int(name: str, default: int) -> int:
         return default
 
 
+def _escape_newlines_in_json_strings(raw: str) -> str:
+    """JSON文字列リテラル内の生改行(\n / \r)を \\n にエスケープする"""
+    result = []
+    in_string = False
+    escape = False
+
+    for ch in raw:
+        if escape:
+            result.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            result.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string and ch in ("\n", "\r"):
+            if ch == "\n":
+                result.append("\\n")
+            continue
+        result.append(ch)
+
+    return "".join(result)
+
+
 class EmailAnalysisSchema(BaseModel):
     category: Literal["agent", "company", "other"] = Field(
         description="メールのカテゴリ。必ず指定された3つのいずれか1つを選択してください。"
@@ -48,15 +76,12 @@ class EmailAnalysisSchema(BaseModel):
 
 class AIService:
     def __init__(self, model=None, diagnose=True):
-        # 念のためインスタンス生成時にも .env を再読み込み可能にする
         load_dotenv()
 
-        # 優先順位: 明示引数 model > .env(環境変数 OLLAMA_MODEL) > デフォルトモデル
         env_model = (os.getenv("OLLAMA_MODEL") or "").strip()
         target_model = model or env_model or DEFAULT_MODEL
         self.model = target_model
 
-        # 8GB RAM / CPU推論環境向けにコンテキスト長と最大生成トークンを環境変数で制御
         num_ctx = _get_env_int("OLLAMA_NUM_CTX", 2048)
         num_predict = _get_env_int("OLLAMA_NUM_PREDICT", 1024)
         num_thread = _get_env_int("OLLAMA_NUM_THREAD", max(1, (os.cpu_count() or 4) - 1))
@@ -69,7 +94,6 @@ class AIService:
             num_thread=num_thread,
         )
 
-        # JSON出力モードの設定（失敗時は通常LLMにフォールバック）
         try:
             self.structured_chain = self.llm.bind(response_format={"type": "json_object"})
             self.use_fallback_json = True
@@ -114,6 +138,38 @@ class AIService:
         if start != -1 and end != -1 and end > start:
             content = content[start:end + 1]
 
+        # 1. 通常パース・改行エスケープ・末尾カンマ除去を順に試行
+        no_trailing_comma = re.sub(r",\s*([}\]])", r"\1", content)
+        candidates = [
+            content,
+            no_trailing_comma,
+            _escape_newlines_in_json_strings(content),
+            _escape_newlines_in_json_strings(no_trailing_comma),
+        ]
+        for cand in candidates:
+            try:
+                parsed = json.loads(cand)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                continue
+
+        # 2. JSON構文が壊れている場合の正規表現フォールバック抽出
+        cat_match = re.search(r'"category"\s*:\s*"(agent|company|other)"', content, re.IGNORECASE)
+        sum_match = re.search(r'"summary"\s*:\s*"([\s\S]*?)"\s*\}', content)
+        if not sum_match:
+            sum_match = re.search(r'"summary"\s*:\s*"([\s\S]+)$', content)
+
+        if cat_match or sum_match:
+            extracted_cat = cat_match.group(1).lower() if cat_match else ""
+            extracted_sum = ""
+            if sum_match:
+                extracted_sum = sum_match.group(1).rstrip('",} \n\r')
+                extracted_sum = extracted_sum.replace('\\n', '\n').replace('\\"', '"')
+            if extracted_sum:
+                return {"category": extracted_cat, "summary": extracted_sum}
+
+        # 最後のjson.loadsエラーを発生させて呼び出し元のリトライに乗せる
         parsed = json.loads(content)
         return parsed if isinstance(parsed, dict) else {}
 
@@ -124,14 +180,18 @@ class AIService:
         rule_category = self._quick_classify_rule(subject, sender, email_body)
         cleaned_text = self._extract_clean_text_with_urls(email_body)
 
+        # 本文が空・画像のみ等の場合は件名ベースの確定要約を返す（無限失敗ループ防止）
         if not cleaned_text or len(cleaned_text.strip()) < 5:
-            return rule_category or 'other', 'メール本文が空であるか、テキストを抽出できませんでした。'
+            safe_subject = (subject or "(件名なし)").strip()
+            safe_sender = (sender or "不明な送信者").strip()
+            return rule_category or 'other', f"【件名】{safe_subject}（送信者: {safe_sender} / 本文テキストなし）"
 
         safe_text = cleaned_text.strip()
-        if len(safe_text) > 2500:
-            safe_text = safe_text[:2500] + "\n...(以下省略)..."
+        if len(safe_text) > 2200:
+            safe_text = safe_text[:2200] + "\n...(以下省略)..."
 
-        prompt_text = f"""以下のメールを分析し、必ずJSONフォーマットのみで結果を返してください。
+        prompt_text = f"""以下のメールを分析し、必ず有効なJSONオブジェクト1つのみで結果を返してください。
+JSON文字列内の改行は必ず \\n にエスケープし、ダブルクォーテーションは \\" にエスケープしてください。
 
 【カテゴリ分類ルール（厳守）】
 - "agent": フリーランスエージェント、転職エージェント、求人サイト・求人サービス（doda、エンゲージ、リクルート、マイナビ、レバテック等）、IT系派遣・紹介会社からの求人紹介、案件紹介、スカウト、面談案内などのメール。
@@ -156,7 +216,9 @@ class AIService:
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                messages = [HumanMessage(content=prompt_text)]
+                # 2回目のリトライ時は本文を短縮してコンテキスト溢れ・JSON崩れを回避
+                current_prompt = prompt_text if attempt == 0 else prompt_text.replace(safe_text, safe_text[:800])
+                messages = [HumanMessage(content=current_prompt)]
                 response = self.structured_chain.invoke(messages)
                 data = self._parse_json_response(response.content)
 
@@ -164,7 +226,6 @@ class AIService:
                 if llm_category not in ["agent", "company", "other"]:
                     llm_category = ""
 
-                # 明確なエージェント判定やシステム/サービス通知ルールを優先しつつ、LLMの判定を反映
                 if rule_category == "agent":
                     category = "agent"
                 elif rule_category == "other" and llm_category != "company":
@@ -189,9 +250,6 @@ class AIService:
         return rule_category or "other", "要約の生成に失敗しました。"
 
     def analyze_emails_batch(self, emails_data):
-        """
-        8GB RAM環境でメモリ逼迫・タイムアウトを防ぐため、1件ずつ逐次実行する。
-        """
         if not emails_data:
             return {}
 
@@ -244,7 +302,6 @@ class AIService:
         sender_lower = (sender or "").lower()
         body_lower = (body or "").lower()
 
-        # 1. エージェント（フリーランスエージェント・転職エージェント・dodaやエンゲージ等の求人/案件サービス）
         agent_domains = [
             'doda.jp', 'en-gage.com', 'enjapan.com', 'mynavi.jp', 'bizreach.jp',
             'indeed.com', 'rikunabi.com', 'r-agent.com', 'levtech.jp', 'midworks.jp',
@@ -266,7 +323,6 @@ class AIService:
         ):
             return 'agent'
 
-        # 2. その他（サービス通知・システム通知・決済/認証・プライベート連絡など）
         other_keywords = [
             '領収書', '注文確認', 'パスワード', '決済完了', '認証コード', 'ワンタイム',
             'システム通知', 'サービス通知', '自動送信', '配信停止', 'noreply',
@@ -275,7 +331,6 @@ class AIService:
         if any(k in sender_lower for k in other_keywords) or any(k in subject_lower for k in other_keywords):
             return 'other'
 
-        # 3. 企業直接（企業やその企業の担当者からの直接の連絡）
         company_domains = [
             'hrmos.co', 'onehr.hrmos.co', 'talentio.com',
             'sonar-ats.jp', 'i-webs.jp', 'herp.careers',
@@ -291,7 +346,6 @@ class AIService:
         ):
             return 'company'
 
-        # 判定が確定しない場合は LLM 側の分類に委ねるため None を返す
         return None
 
     def _extract_clean_text_with_urls(self, html_content):
